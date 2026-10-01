@@ -24,13 +24,14 @@ app.use((req, res, next) => {
 });
 
 const userState = [];
+
 app.post("/new-user", async (request, response) => {
   if (Object.keys(request.body).length === 0) {
     const result = {
       status: "error",
       message: "This name is already taken!",
     };
-    response.status(400).send(JSON.stringify(result)).end();
+    return response.status(400).send(JSON.stringify(result)).end();
   }
   const { name } = request.body;
   const isExist = userState.find((user) => user.name === name);
@@ -45,36 +46,43 @@ app.post("/new-user", async (request, response) => {
       user: newUser,
     };
     logger.info(`New user created: ${JSON.stringify(newUser)}`);
-    response.send(JSON.stringify(result)).end();
+    return response.send(JSON.stringify(result)).end();
   } else {
     const result = {
       status: "error",
       message: "This name is already taken!",
     };
     logger.error(`User with name "${name}" already exist`);
-    response.status(409).send(JSON.stringify(result)).end();
+    return response.status(409).send(JSON.stringify(result)).end();
   }
 });
 
 const server = http.createServer(app);
 const wsServer = new WebSocketServer({ server });
+
 wsServer.on("connection", (ws) => {
   ws.on("message", (msg, isBinary) => {
     const receivedMSG = JSON.parse(msg);
     logger.info(`Message received: ${JSON.stringify(receivedMSG)}`);
-    // обработка выхода пользователя
+
+    if (receivedMSG.user && receivedMSG.user.name) {
+      ws.userName = receivedMSG.user.name;
+    }
+
     if (receivedMSG.type === "exit") {
       const idx = userState.findIndex(
         (user) => user.name === receivedMSG.user.name
       );
-      userState.splice(idx, 1);
+      if (idx !== -1) {
+        userState.splice(idx, 1);
+      }
       [...wsServer.clients]
         .filter((o) => o.readyState === WebSocket.OPEN)
         .forEach((o) => o.send(JSON.stringify(userState)));
       logger.info(`User with name "${receivedMSG.user.name}" has been deleted`);
       return;
     }
-    // обработка отправки сообщения
+
     if (receivedMSG.type === "send") {
       [...wsServer.clients]
         .filter((o) => o.readyState === WebSocket.OPEN)
@@ -82,6 +90,20 @@ wsServer.on("connection", (ws) => {
       logger.info("Message sent to all users");
     }
   });
+
+  ws.on("close", () => {
+    if (ws.userName) {
+      const idx = userState.findIndex((user) => user.name === ws.userName);
+      if (idx !== -1) {
+        userState.splice(idx, 1);
+        [...wsServer.clients]
+          .filter((o) => o.readyState === WebSocket.OPEN)
+          .forEach((o) => o.send(JSON.stringify(userState)));
+        logger.info(`User "${ws.userName}" disconnected (connection closed)`);
+      }
+    }
+  });
+
   [...wsServer.clients]
     .filter((o) => o.readyState === WebSocket.OPEN)
     .forEach((o) => o.send(JSON.stringify(userState)));
